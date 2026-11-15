@@ -105,7 +105,7 @@ The notebook takes about 10 minutes on qBraid, with the parameter sweep and grad
 
 ```
 .
-├── challenge_2_portfolio_final.ipynb  # Main notebook (as submitted) (Beginner → Intermediate → Advanced + appendix)
+├── challenge_2_portfolio_final.ipynb  # Main notebook, as submitted (Beginner → Advanced + appendix)
 ├── appendix_5asset_qaoa_shikha.ipynb  # BasQ Max-Cut QAOA tutorial + Shikha's independent 5-asset implementation
 ├── TeamCosine_Final_No_Notebook.pdf   # Written report (as submitted)
 ├── docs/
