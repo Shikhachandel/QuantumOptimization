@@ -4,9 +4,21 @@
 
 🏆 **First prize, BasQ Qiskit Fall Fest 2026 (Challenge 2)** — Team Cosine
 
-An end-to-end quantum optimization study of selecting exactly 3 assets from 8 while balancing expected return and risk. The notebook develops a beginner-friendly penalty-based QAOA, improves it with a Dicke-state initialization and constraint-preserving XY mixer, and investigates what happens under classical competition, deeper circuits, and simulated hardware noise.
+Pick **exactly 3 of 8 assets** so that expected return is high and risk is low, using the Quantum Approximate Optimization Algorithm (QAOA). We start with the textbook penalty encoding, replace it with a constraint-preserving **XY mixer** that cannot produce invalid portfolios, and then test both against classical solvers, barren plateaus and a simulated noisy IBM Heron device.
 
-> **Main finding:** On the ideal simulator, XY-QAOA produces 100% budget-valid portfolios and reaches 13.0% probability of sampling the exact optimum, versus 61.9% validity and 6.0% optimal-solution probability for the selected penalty-QAOA baseline at depth 5. However, classical methods win easily on this small instance, and simulated device noise largely removes the quantum improvement.
+> **Main finding.** On an ideal simulator, XY-QAOA returns a valid portfolio **100%** of the time and samples the exact optimum with probability **13.0%** (33× random), versus 61.9% valid and 6.0% optimal for the best penalty-QAOA setting (both at depth $p=5$). Classical methods still win easily at this size, and under simulated device noise the XY circuit's extra gates cancel its advantage.
+
+## Contents
+
+- [Team](#team)
+- [The problem](#the-problem)
+- [Method](#method)
+- [Results](#results)
+- [How to run](#how-to-run)
+- [Repository layout](#repository-layout)
+- [Evaluation methodology](#evaluation-methodology)
+- [Next steps](#next-steps)
+- [Acknowledgments, references and AI use](#acknowledgments-references-and-ai-use)
 
 ## Team
 
@@ -19,87 +31,146 @@ An end-to-end quantum optimization study of selecting exactly 3 assets from 8 wh
 
 ## The problem
 
-We generate a synthetic, reproducible market with 8 assets, expected returns $\boldsymbol{\mu}$, and a correlated covariance matrix $\Sigma$ from a two-factor model. The task is to minimize the mean–variance objective
+We generate a synthetic, reproducible market with $n = 8$ assets: expected returns $\mu$ and a correlated covariance matrix $\Sigma$ from a two-factor model. Each portfolio is a bitstring $x \in \lbrace 0,1 \rbrace^n$, where $x_i = 1$ means asset $i$ is held. We minimize the mean–variance cost
 
 $$
-f(\mathbf{x}) = q\,\mathbf{x}^{T}\Sigma\mathbf{x} - \boldsymbol{\mu}^{T}\mathbf{x}
+f(x) = q \, x^{\top} \Sigma \, x \;-\; \mu^{\top} x
 $$
 
-subject to
+subject to the budget constraint
 
 $$
-\sum_{i=1}^{8} x_i = 3, \qquad x_i \in \{0,1\}.
+\sum_{i=1}^{n} x_i = K, \qquad K = 3 .
 $$
 
-Here $x_i=1$ means asset $i$ is selected, and $q$ controls risk aversion. The notebook uses $q=1$ and a fixed random seed. The "budget" is an exact number of selected assets, not a dollar-spending limit.
+The risk aversion is $q = 1$ and the random seed is fixed. "Budget" here means an exact number of assets, not a dollar limit. Only $\binom{8}{3} = 56$ of the $2^8 = 256$ bitstrings are valid portfolios.
 
-For ordinary QAOA, the hard constraint becomes a penalty:
+## Method
+
+### QAOA in one line
+
+QAOA prepares the state
 
 $$
-C_{\lambda}(\mathbf{x})=f(\mathbf{x})+\lambda\left(\sum_i x_i -3\right)^2.
+\lvert \psi(\gamma, \beta) \rangle = \prod_{k=1}^{p} e^{-i \beta_k H_M} \, e^{-i \gamma_k H_C} \; \lvert \psi_0 \rangle
 $$
 
-This is converted from QUBO to an Ising cost Hamiltonian, containing Pauli $Z$ and $ZZ$ terms. The quantum circuit optimizes angles in alternating cost and mixer layers.
+where $H_C$ is the cost Hamiltonian (diagonal, with $H_C \lvert x \rangle = C(x) \lvert x \rangle$), $H_M$ is the mixer, $p$ is the **depth** (number of layers), and the $2p$ angles $\gamma, \beta$ are tuned by a classical optimizer to minimize $\langle \psi \rvert H_C \lvert \psi \rangle$.
 
-## Challenge levels covered
+### Beginner: penalty QAOA
 
-| Level | Implementation |
-|---|---|
-| Beginner | 8-asset portfolio, exact-budget penalty, QUBO-to-Ising encoding, penalty-versus-depth experiments, and brute-force verification |
-| Intermediate | Constraint-preserving XY-QAOA, Dicke-state initialization, optimizer initialization strategies, optional CVaR objective, classical benchmarks, and gate-count comparison |
-| Advanced (exploratory) | Gradient-variance/barren-plateau experiments for up to 14 qubits and noisy simulation using an IBM Heron fake backend |
-| Appendix | Separate 5-asset implementation cross-checking penalty QAOA against XY-QAOA |
+The constraint is moved into the cost as a penalty:
 
-**Chosen intermediate route: Improved QAOA** (not quantum machine learning). Instead of trying to discourage invalid portfolios with a large penalty, the Dicke state starts in the exact-$K$ subspace and the XY mixer preserves that subspace under ideal operation.
+$$
+C_{\lambda}(x) = f(x) + \lambda \left( \sum_{i} x_i - K \right)^{2}
+$$
 
-## Results from the notebook
+Substituting $x_i = (1 - Z_i)/2$ turns this QUBO into an Ising Hamiltonian with Pauli $Z_i$ and $Z_i Z_j$ terms. The circuit starts in $\lvert + \rangle^{\otimes n}$ (all 256 bitstrings) and uses the standard mixer $H_M = \sum_i X_i$.
 
-The classical ground truth is obtained by enumerating all $2^8=256$ binary strings, including $\binom{8}{3}=56$ valid portfolios.
+**How large should $\lambda$ be?** The lowest-energy state is a valid portfolio exactly when
+
+$$
+\lambda \;\ge\; \lambda_{\mathrm{crit}} = \max_{x \text{ invalid}} \frac{f_{\mathrm{opt}} - f(x)}{\left( \lvert x \rvert - K \right)^{2}}
+$$
+
+Below $\lambda_{\mathrm{crit}}$, even a perfect solver returns an invalid portfolio. Far above it, the penalty drowns out the return/risk differences QAOA needs to see. We therefore sweep $\lambda$ in units of $\lambda_{\mathrm{crit}}$.
+
+### Intermediate: constraint-preserving XY-QAOA
+
+Instead of penalizing invalid portfolios, we make them impossible (Hadfield et al., 2019):
+
+| | Penalty QAOA | XY-QAOA |
+|---|---|---|
+| Initial state | $\lvert + \rangle^{\otimes n}$: all 256 bitstrings | Dicke state $\lvert D^{n}_{K} \rangle$: equal superposition of the 56 valid portfolios |
+| Mixer | $\sum_i X_i$ (changes the number of assets) | $\sum_{(i,j) \in \text{ring}} \tfrac{1}{2} \left( X_i X_j + Y_i Y_j \right)$ (swaps one asset in for one out) |
+| Cost | $f(x) + \lambda \left( \sum_i x_i - K \right)^2$ | $f(x)$, so there is no $\lambda$ to tune |
+
+The XY term only exchanges $\lvert 01 \rangle \leftrightarrow \lvert 10 \rangle$, so the number of held assets never changes. Together with a diagonal cost layer, this gives **P(valid) = 1 by construction** on an ideal device. The Dicke state is prepared with the deterministic $O(nK)$ circuit of Bärtschi & Eidenbenz (2019).
+
+We also try a **CVaR** objective (Barkoutsos et al., 2020), which minimizes the mean of the best $\alpha = 10\%$ of outcomes instead of the full average.
+
+### Advanced: trainability and noise
+
+- **Barren plateaus.** For $n = 4, 6, \dots, 14$ with $K = n/2$, we measure the gradient variance $\mathrm{Var}_{\theta} \left[ \partial \langle C \rangle / \partial \gamma_1 \right]$ over 100 random angle settings, for both mixers at shallow ($p = 2$) and deep ($p = n$) depth.
+- **Hardware noise.** Circuits are transpiled to `FakeFez`, a snapshot of a 156-qubit IBM Heron device (heavy-hex connectivity, measured error rates), and run with Qiskit Aer. We then apply readout mitigation and post-selection on valid portfolios.
+
+## Results
+
+The classical ground truth comes from enumerating all 256 bitstrings.
 
 - **Exact optimal portfolio:** BETA, GAMA, THET
-- **Optimal mean–variance cost:** approximately −0.3323 (lower is better)
+- **Optimal mean–variance cost:** ≈ −0.3323 (lower is better)
 
-Seeded, ideal-simulation results (best depth by optimal-solution probability for each method):
+### Penalty QAOA: a trade-off, not a fix
 
-| Method | Depth $p$ | P(valid) | P(optimal) | Quality among valid solutions |
+![Penalty sweep: P(valid), P(optimal) and quality over depth and penalty strength](docs/images/heatmaps.png)
+
+A larger $\lambda$ gives more valid portfolios but worse ones. The best P(optimal) sits near $\lambda \approx \lambda_{\mathrm{crit}}$, and even there about 40% of the probability is wasted on invalid portfolios.
+
+### Penalty vs XY-QAOA (ideal simulator)
+
+![P(valid), P(optimal) and quality vs depth for penalty QAOA, XY-QAOA and CVaR](docs/images/comparison.png)
+
+Best depth by optimal-solution probability for each method:
+
+| Method | Depth $p$ | P(valid) | P(optimal) | Quality among valid |
 |---|---|---|---|---|
-| Penalty QAOA ($\lambda=\lambda_{crit}$) | 5 | 61.9% | 6.0% | 0.827 |
-| Penalty QAOA ($\lambda=10\lambda_{crit}$) | 5 | 87.5% | 1.8% | 0.644 |
+| Penalty QAOA ($\lambda = \lambda_{\mathrm{crit}}$) | 5 | 61.9% | 6.0% | 0.827 |
+| Penalty QAOA ($\lambda = 10 \lambda_{\mathrm{crit}}$) | 5 | 87.5% | 1.8% | 0.644 |
 | **XY-QAOA (Dicke + XY mixer)** | 5 | **100.0%** | **13.0%** | **0.855** |
 | XY-QAOA + CVaR(0.1) | 3 | 100.0% | 10.1% | 0.765 |
 
-A random 8-bit string has a 1/256 ≈ 0.39% chance of matching the exact optimum; a uniformly random valid portfolio has a 1/56 ≈ 1.79% chance.
+For reference, a random 8-bit string matches the optimum with probability 1/256 ≈ 0.39%, and a random valid portfolio with 1/56 ≈ 1.79%.
 
-### Classical comparisons
+### Classical baselines
 
-The notebook compares against exact enumeration, a greedy heuristic, and simulated annealing with budget-preserving swap moves. In the reported run:
+| Method | Result |
+|---|---|
+| Exact enumeration | Finds the optimum in about 2.4 ms |
+| Greedy | Also finds the optimum on this instance |
+| Simulated annealing (50 swap steps) | Finds the optimum in 95.8% of 500 seeded runs |
 
-- **Exact enumeration:** identifies the optimum in about 2.4 ms.
-- **Greedy:** also identifies the optimum on this particular instance.
-- **Simulated annealing (50 swap steps):** reaches the optimum in 95.8% of 500 seeded runs.
+There is **no quantum advantage** here, and we don't claim one. The contribution is an empirical comparison of constraint encodings, solution quality, circuit cost and noise sensitivity. Interestingly, annealing's best move (swap one asset in, one out) is the classical twin of the XY mixer.
 
-There is no demonstrated quantum advantage here. The contribution is an empirical comparison of constraint encodings, solution quality, circuit cost, and noise sensitivity, not a claim of speedup.
+### Gate cost
 
-### Gate cost and noise
+The XY design is not free. After decomposition to CX gates, XY-QAOA needs **210 CX** at $p = 1$ versus **56 CX** for penalty QAOA, and 498 versus 280 at $p = 5$. The Dicke state alone costs 138 CX. Even at equal gate budget XY still wins on the ideal simulator: XY at $p = 1$ (210 CX) roughly matches penalty QAOA at $p = 5$ (280 CX) in P(optimal), with every sample valid.
 
-The XY design has a meaningful overhead. After decomposition to CX gates, the notebook reports 210 CX for XY-QAOA versus 56 CX for penalty QAOA at $p=1$, and 498 versus 280 CX at $p=5$.
+### Barren plateaus
 
-The advanced section uses Qiskit Aer with `FakeFez`, a simulated IBM Heron backend with a device-derived noise model; it does not execute on a real quantum processor. At $p=5$, XY-QAOA feasibility falls from 100% ideally to about 28.5% under noise. After conditioning on valid samples, the best noisy settings are roughly tied at 5.3% probability of the optimum. The notebook also explores readout mitigation and gradient-variance scaling.
+![Gradient variance vs number of qubits for X and XY mixers at shallow and deep depth](docs/images/barren_plateaus.png)
+
+Deep circuits ($p = n$) of **both** kinds show exponentially vanishing gradients: the variance shrinks about 1.6× (X mixer) and 1.9× (XY mixer) per extra qubit. Staying inside the valid subspace does not help, because $\binom{n}{n/2}$ still grows exponentially. Shallow circuits with smart initialization (ramp + INTERP) keep usable gradients.
+
+### Noise on a simulated IBM Heron device
+
+![P(valid) and P(optimal | valid) under FakeFez noise, and P(optimal | valid) vs CZ gate count](docs/images/noise.png)
+
+- **Routing roughly doubles the cost:** heavy-hex connectivity takes penalty QAOA from 56 to 92 two-qubit gates at $p = 1$, and XY-QAOA from 210 to 345 (about 1000 at $p = 5$).
+- **Noise breaks XY's guarantee:** P(valid) falls from 1.00 to 0.47 at $p = 1$ and to about 0.28 at $p = 5$. Every invalid sample is a *detected* error, so post-selection removes it, at the cost of discarding up to ~70% of shots.
+- **The ideal winner is not the hardware winner:** after post-selection the best noisy results are a tie at about 5.3% optimal: penalty QAOA at $p = 5$ versus XY-QAOA at only $p = 2$. Deeper XY circuits get worse under noise.
+- **Readout mitigation barely helps** (≤ 1 percentage point): gate errors dominate.
+
+**On hardware, the currency is two-qubit gates, not layers.** This runs on a simulator with a device-derived noise model, not on a real quantum processor.
+
+### Appendix: independent cross-check
+
+A separate implementation on a different instance (5 assets, pick 3; hand-built gates, no shared code) reproduces the main finding: XY-QAOA is 100% valid and samples the optimum 3–3.5× more often than a random valid portfolio, while penalty QAOA with a too-large penalty is valid but no better than random.
 
 ## How to run
 
-Requirements: Python 3.12 was used for the saved run; Qiskit 2.x APIs are used.
+Python 3.12 was used for the saved run, with Qiskit 2.x.
 
-1. Clone this repository and open `challenge_2_portfolio_final.ipynb` in JupyterLab, VS Code, or qBraid.
-2. Install the dependencies in the same Python environment as your notebook kernel:
+1. Clone this repository and open `challenge_2_portfolio_final.ipynb` in JupyterLab, VS Code or qBraid.
+2. Install the dependencies in the same environment as your notebook kernel:
    ```bash
    python -m pip install -r requirements.txt
    ```
-   Alternatively, uncomment and run the notebook's first `%pip install` cell.
-3. Restart the kernel and **Run All** cells in order. The notebook defines variables and functions across successive sections; running later cells first can cause `NameError` or stale results.
-4. Inspect the plots, printed comparison tables, and generated `figures/` and `results/` directories.
+   Or uncomment and run the notebook's first `%pip install` cell.
+3. Restart the kernel and **Run All** in order. Later sections reuse variables from earlier ones, so running cells out of order can cause `NameError` or stale results.
+4. Plots and tables are written to `figures/` and `results/`.
 
-The notebook takes about 10 minutes on qBraid, with the parameter sweep and gradient experiments taking the most time. Runtime will vary by environment.
+A full run takes about 10 minutes on qBraid; the penalty sweep and the barren-plateau experiment take the longest.
 
 ## Repository layout
 
@@ -110,40 +181,48 @@ The notebook takes about 10 minutes on qBraid, with the parameter sweep and grad
 ├── TeamCosine_Final_No_Notebook.pdf   # Written report (as submitted)
 ├── docs/
 │   ├── presentation.pptx              # Presentation deck
-│   └── study_deck.pdf                 # Team study / Q&A prep deck
+│   ├── study_deck.pdf                 # Team study / Q&A prep deck
+│   └── images/                        # Plots used in this README (from the saved notebook run)
 ├── requirements.txt
 ├── LICENSE
 └── README.md
 ```
 
-Running the main notebook also creates `figures/` (e.g. `figures/assets.png`, `figures/comparison.png`, `figures/noise.png`) and `results/` (e.g. `results/intermediate_summary.csv`, `results/classical_baselines.csv`). These are generated outputs and are not checked in.
+Running the notebook also creates `figures/` and `results/` (CSV tables such as `results/intermediate_summary.csv` and `results/classical_baselines.csv`). These are generated outputs and are not checked in.
 
 ## Evaluation methodology
 
-Results use probabilities from the full final QAOA state, rather than counting only the best observed bitstring:
+All metrics use the full probability distribution of the final QAOA state, not just the best sample seen. With 256 bitstrings and thousands of shots, "best sample found" would read 100% even for a bad circuit.
 
-- **P(valid):** probability of measuring exactly 3 selected assets.
-- **P(optimal):** probability of measuring the globally optimal valid portfolio.
-- **Quality:** normalized conditional solution quality among valid measured portfolios (1 is best).
-- **Classical reference:** brute-force exhaustive enumeration.
-- **Correctness checks:** compare the Hamiltonian diagonal to classical costs, verify simulator agreement with Qiskit, verify Dicke-state preparation, and compare sampled versus predicted probabilities.
+- **P(valid):** probability of measuring exactly $K = 3$ assets.
+- **P(optimal):** probability of measuring the globally optimal portfolio.
+- **Quality:** among valid outcomes, how close the average portfolio is to the best one (1 = always optimal, 0 = always worst).
+- **Correctness checks:** the Hamiltonian diagonal matches the brute-force cost for all 256 bitstrings; the fast simulators match Qiskit's statevector to about $10^{-16}$; the Dicke state has fidelity 1.0; sampled frequencies match predicted probabilities.
 
-**Important limitation:** ideal-simulator validity guarantees do not survive physical noise. The synthetic asset data are educational and are not investment recommendations.
+The asset data are synthetic and for education only. They are not investment advice.
 
-## Potential next steps
+## Next steps
 
-- Reduce XY-mixer routing and Dicke-state preparation overhead with a hardware-aware circuit.
-- Test a warm start from a feasible portfolio instead of preparing a uniform Dicke state.
-- Explore larger portfolio instances with stronger classical heuristic baselines.
-- Validate noise-mitigation approaches on actual hardware when available.
+- A hardware-native XY ring that follows physically connected qubits, so the mixer needs no SWAPs.
+- A cheaper Dicke-state preparation, or a warm start from a single good valid portfolio.
+- Choosing $p$ by the noise budget rather than by the ideal simulator.
+- Larger instances against stronger classical heuristics, and mitigation tested on real hardware.
 
-## Acknowledgments, references, and AI-use disclosure
+## Acknowledgments, references and AI use
 
-This project builds on B. Tirado's *Combinatorial Optimization with QAOA: Max-Cut* tutorial for BasQ Qiskit Fall Fest 2026 (tutorial text CC BY 4.0, tutorial code Apache 2.0).
+This project builds on B. Tirado's *Combinatorial Optimization with QAOA: Max-Cut* tutorial for BasQ Qiskit Fall Fest 2026 (tutorial text CC BY 4.0, code Apache 2.0).
 
-Key references discussed in the notebook include Markowitz (1952) on portfolio selection; Farhi, Goldstone & Gutmann (2014) on QAOA; Hadfield et al. (2019) on alternating-operator/XY mixers; Bärtschi & Eidenbenz (2019) on Dicke states; Zhou et al. (2020) on QAOA initialization; Barkoutsos et al. (2020) on CVaR; and McClean et al. (2018), Larocca et al. (2022), and Ragone et al. (2024) on barren plateaus.
+**References**
+- H. Markowitz, *Portfolio Selection*, J. Finance (1952).
+- E. Farhi, J. Goldstone, S. Gutmann, *A Quantum Approximate Optimization Algorithm*, [arXiv:1411.4028](https://arxiv.org/abs/1411.4028) (2014).
+- S. Hadfield et al., *From the Quantum Approximate Optimization Algorithm to a Quantum Alternating Operator Ansatz*, Algorithms 12, 34 (2019).
+- A. Bärtschi, S. Eidenbenz, *Deterministic Preparation of Dicke States*, FCT (2019).
+- L. Zhou et al., *Quantum Approximate Optimization Algorithm: Performance, Mechanism, and Implementation on Near-Term Devices*, Phys. Rev. X 10, 021067 (2020).
+- P. Barkoutsos et al., *Improving Variational Quantum Optimization using CVaR*, Quantum 4, 256 (2020).
+- J. McClean et al., *Barren plateaus in quantum neural network training landscapes*, Nat. Commun. 9, 4812 (2018).
+- M. Larocca et al., *Diagnosing Barren Plateaus*, Quantum 6, 824 (2022); M. Ragone et al., *A Lie algebraic theory of barren plateaus*, Nat. Commun. 15, 7172 (2024).
 
-**AI assistance:** We used Claude (Anthropic), through Claude Code, to help write code and explanatory text, suggest methods, and draft the report, working under the team's direction. The team selected the challenge and route, ran the experiments on qBraid, and reviewed the results. We checked the best portfolio by enumerating all 256 bitstrings, compared NumPy and Qiskit simulations, and independently tested a five-asset version.
+**AI assistance.** We used Claude (Anthropic), through Claude Code, to help write code and explanatory text, suggest methods and draft the report, working under the team's direction. The team chose the challenge and route, ran the experiments on qBraid and reviewed the results. We verified the optimum by enumerating all 256 bitstrings, compared NumPy and Qiskit simulations, and independently tested a five-asset version.
 
 ---
 
