@@ -90,7 +90,7 @@ The advanced section uses Qiskit Aer with `FakeFez`, a simulated IBM Heron backe
 
 Requirements: Python 3.12 was used for the saved run; Qiskit 2.x APIs are used.
 
-1. Clone this repository and open `portfolio_qaoa.ipynb` in JupyterLab, VS Code, or qBraid.
+1. Clone this repository and open `challenge_2_portfolio_final.ipynb` in JupyterLab, VS Code, or qBraid.
 2. Install the dependencies in the same Python environment as your notebook kernel:
    ```bash
    python -m pip install -r requirements.txt
@@ -105,10 +105,10 @@ The notebook takes about 10 minutes on qBraid, with the parameter sweep and grad
 
 ```
 .
-├── portfolio_qaoa.ipynb               # Main notebook (Beginner → Intermediate → Advanced + appendix)
+├── challenge_2_portfolio_final.ipynb  # Main notebook (as submitted) (Beginner → Intermediate → Advanced + appendix)
 ├── appendix_5asset_qaoa_shikha.ipynb  # BasQ Max-Cut QAOA tutorial + Shikha's independent 5-asset implementation
+├── TeamCosine_Final_No_Notebook.pdf   # Written report (as submitted)
 ├── docs/
-│   ├── report.pdf                     # Written report (submission)
 │   ├── presentation.pptx              # Presentation deck
 │   └── study_deck.pdf                 # Team study / Q&A prep deck
 ├── requirements.txt
